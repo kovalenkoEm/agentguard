@@ -71,9 +71,11 @@ string:
 
 Evaluation order, first match wins, **fail closed**:
 
-1. `trusted_binary_roots` — a binary that does not resolve inside `/usr/bin`,
-   `/bin`, `/usr/local/bin`, `C:\Program Files\Git\usr\bin`, … is denied even if
-   its name looks harmless (`./ls` is not `ls`).
+1. `trusted_binary_roots` — a name that carries a location (`./ls`,
+   `/tmp/payload/ls`) has to resolve inside a trusted root, so a shadow binary is
+   not `ls`. A bare name is trusted at the directory `PATH` found it in, because
+   stock Ubuntu ships `/usr/bin/ls` as a link into `/usr/lib/cargo/bin/coreutils`
+   and refusing that just breaks the machine.
 2. `rules:` — cross-cutting, e.g. "argument contains a URL" → `ask`,
    "`rm` with `-rf`" → `deny`.
 3. the capability block — scope, protected globs, binary lists, subcommands.
@@ -244,10 +246,13 @@ regression test for every row marked **Fixed**.
 | 10 | false positive | `find . -exec grep TODO {} +` refused, because `{}` was treated as shell syntax | **Fixed**: `{}` and `()` removed from the control set — they mean nothing to an argv vector, and refusing them cost real tasks |
 | 11 | false positive | `grep -oP '/src/.*?TODO'` denied as an absolute path | **Fixed**: argument classification now requires the path to *exist*; a regex that does not exist cannot be read |
 | 12 | policy bug | a typo in a rule matcher (`args_prefx`) silently disabled the rule | **Fixed**: policy loading is strict — unknown matchers and bad actions raise |
-| 13 | — | `rm *.py` turning a file argument into a wildcard | **N/A by design**: there is no shell, so no globbing |
+| 13 | bug (CI) | policy keyed on the *resolved* basename: on the CI image `/usr/bin/rm` is a link to `gnurm`, so every allowlist entry missed and the guard blocked everything | **Fixed**: the policy key is the name the model invoked; the resolved path only feeds the trust check |
+| 14 | false positive (CI) | Ubuntu ships `/usr/bin/ls` as a link into `/usr/lib/cargo/bin/coreutils`, so the strict trust check refused a plain `ls` and every benign task lost | **Fixed**: a bare name is trusted at the directory `PATH` found it in; only a name carrying a location (`./ls`) must resolve into a trusted root |
+| 15 | — | `rm *.py` turning a file argument into a wildcard | **N/A by design**: there is no shell, so no globbing |
 
-Rows 10–11 came out of running the eval against the real model, not out of
-staring at the code — which is the point of having an eval.
+Rows 10–14 came out of running the eval against the real model and the test
+suite against a fresh Ubuntu runner, not out of staring at the code — which is
+the point of having both.
 
 ## Limitations
 

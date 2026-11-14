@@ -21,9 +21,11 @@ workspace: ./workspace
 # Verdict when nothing matches anything. `deny` is the only sane value.
 default: deny
 
-# A binary is trusted only if it resolves inside one of these roots. Asking for
-# "./ls", "payload/ls" or "/tmp/x/ls" is denied even though the basename is on
-# the allow list.
+# A binary is trusted only if it resolves inside one of these roots. The check
+# applies to the *location* the model named: `./ls` and `/tmp/x/ls` must resolve
+# here. A bare `ls` is trusted at the directory PATH found it in, because stock
+# Ubuntu links /usr/bin/ls into /usr/lib/cargo/bin/coreutils and refusing that
+# would block every harmless command.
 trusted_binary_roots:
   - /usr/bin
   - /bin
