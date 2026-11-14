@@ -8,4 +8,7 @@ benchmarks/results/*
 workspace/
 demo/
 .demo/
+docs/build/
+docs/render/
 *.cast
+~$*

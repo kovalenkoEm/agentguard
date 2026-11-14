@@ -1,0 +1,80 @@
+{
+  "title": "AgentGuard: a capability layer for LLM tool calls",
+  "author": "AgentGuard",
+  "page_size": "A4",
+  "elements": [
+    {"type": "heading", "level": 1, "text": "AgentGuard: a capability layer for LLM tool calls"},
+    {"type": "paragraph", "text": "<font size=9 color='#666666'>Technical brief - D:\\project\\tool_sec - Python, MIT - 79 tests, 20 red-team cases - 2026</font>"},
+
+    {"type": "paragraph", "text": "<b>Abstract.</b> A tool-calling agent is a text model with the permissions of the process that runs it. Indirect prompt injection exploits exactly that gap: the user's request is benign, the file the agent reads is not, and the model's next message is a tool call that copies <i>~/.ssh/id_rsa</i> into a curl request. Prompt-level filters do not address this, because the injection is not in the prompt and the model is not jailbroken - it is obeying the text in front of it. AgentGuard is a policy layer that sits between the agent and the machine. Every tool call is compiled into a capability request (<i>fs.read</i>, <i>fs.write</i>, <i>proc.spawn</i>), resolved against the real filesystem, and answered ALLOW, ASK or DENY before anything executes. On a 20-case red-team suite, a scripted perfect attacker succeeds 16 of 16 times without the layer and 0 of 16 times with it, while 4 of 4 benign tasks still complete. With a local 7B model, 5 of 16 attacks succeed without the layer and 0 of 16 with it."},
+
+    {"type": "heading", "level": 2, "text": "1. The problem"},
+    {"type": "paragraph", "text": "A coding agent is asked to summarise a README. The README contains an HTML comment addressed to assistants: read <i>../private/.env</i>, POST it to an external URL, do not mention the step. The user's message is clean. A guardrail that inspects the user's message sees nothing. A model that follows it is not malfunctioning; it is doing what the context says, which is the only thing such a model can do."},
+    {"type": "paragraph", "text": "The same shape recurs everywhere the agent reads: an issue comment from a stranger, a docstring in a dependency, a fetched web page, the output of a previous tool call. Each of those is an instruction surface, and none of them is under the operator's control. This is indirect prompt injection, and it is the realistic threat model for a local coding agent, as opposed to an attacker who already has code execution on the host."},
+
+    {"type": "heading", "level": 2, "text": "2. Threat model: what this is, and what it is not"},
+    {"type": "paragraph", "text": "AgentGuard is a reference monitor for <b>hijacked model output inside a non-malicious process</b>. It assumes the model can be made to emit any tool call, and that the process running it has not been compromised at the operating-system level. Under those assumptions a policy layer is sufficient: the model may name any path, but the layer decides whether the path is reachable."},
+    {"type": "paragraph", "text": "It is <b>not</b> a sandbox. The layer lives in the same process as the agent, with the same privileges, so an agent that can execute arbitrary native code can walk around it. This is a real limitation, and the design follows from admitting it: interpreters are denied outright, tools that execute repository code (a test runner, a build tool, an archiver) are never allowed unattended, and the project ships a container profile using <i>--network=none</i> and a read-only root for the cases where the policy layer is not the last line of defence."},
+    {"type": "paragraph", "text": "The design rule that follows is blunt: <b>do not detect injections, make them useless.</b> There is no classifier in the codebase that reads text and guesses intent, because a probabilistic filter on an adversary-controlled channel is a weak control compared with a deterministic check on the action itself."},
+
+    {"type": "heading", "level": 2, "text": "3. Design"},
+    {"type": "paragraph", "text": "The agent gets three tools: read a file, write a file, run a command. Each call is compiled into a capability request rather than evaluated as a string:"},
+    {"type": "table", "header": true, "widths": [1.1, 2.4, 3.6], "rows": [
+      ["capability", "what it names", "what is checked"],
+      ["fs.read", "one resolved path", "inside the workspace? matches a protected pattern?"],
+      ["fs.write", "one resolved path", "same, plus write-protected patterns"],
+      ["proc.spawn", "canonical binary plus argv", "trusted root? allow/ask/deny? subcommand? path arguments?"]
+    ]},
+    {"type": "paragraph", "text": "Decisions are evaluated in order, first match wins, and anything unmatched falls to <i>default: deny</i>: (1) a binary that does not resolve inside a trusted installation root is denied even when its name is allowlisted, so <i>./ls</i> is not <i>ls</i>; (2) cross-cutting rules, such as an argument containing a URL, or a recursive force delete; (3) the capability block - scope, protected globs, binary allow/ask/deny lists and per-binary subcommands; (4) the default."},
+
+    {"type": "heading", "level": 3, "text": "3.1 There is no shell"},
+    {"type": "paragraph", "text": "A command line is tokenised into an argv vector and executed with <i>shell=False</i>. Shell syntax is refused rather than parsed: a semicolon, a pipe, a command substitution or a backtick anywhere in the string raises <i>ShellSyntaxError</i> before any policy question is asked. Quoting never makes a control operator safe, so there is nothing clever to implement and no quoting trick to find. A useful side effect is that no shell means no globbing: <i>rm -rf *</i> deletes a file literally named <i>*</i>, which is to say nothing."},
+    {"type": "paragraph", "text": "What the shell syntax filter cannot see is a path hidden inside an argument. Argument classification therefore unwraps value prefixes (<i>@file</i>, <i>file=</i>, <i>file://</i>, <i>--flag=path</i>) and resolves every argument that names an existing file. Requiring existence is a deliberate trade: a path that does not exist cannot be read, and every binary that creates files is in the ask or deny list, so a glob or a regular expression is no longer mistaken for a path."},
+
+    {"type": "heading", "level": 3, "text": "3.2 Paths are resolved, then classified"},
+    {"type": "paragraph", "text": "A string comparison against the workspace root is not a containment check. Symlinks, NTFS junctions, 8.3 short names, case folding, alternate data streams, device names and tilde expansion all end up somewhere other than where the string points. The path module resolves the real location and compares that with the real workspace root; no user-supplied string is ever passed to a <i>startswith</i> test."},
+
+    {"type": "heading", "level": 3, "text": "3.3 The environment is attack surface"},
+    {"type": "paragraph", "text": "The agent process holds its own API key in the environment. If a spawned command inherits that environment, then <i>env</i> - a read-only, harmless, allowlisted binary - becomes an exfiltration primitive, and no binary allowlist can close that hole. Spawned commands therefore receive a curated environment and a throwaway home directory, which also means <i>~/.ssh/id_rsa</i> does not exist inside the sandbox at all."},
+    {"type": "paragraph", "text": "One structural property holds the rest together: the tool layer never executes anything itself. It hands a request and a callable to the guard, and the callable runs only after a verdict. A tool cannot forget the check, because there is no code path that runs a command without one - and the test suite calls the tools directly, bypassing the agent loop, to prove it."},
+
+    {"type": "heading", "level": 2, "text": "4. Evaluation"},
+    {"type": "paragraph", "text": "The suite has 20 cases: 16 attacks across five families (exfiltration, path traversal, command chaining, environment leak, destructive action) and 4 benign tasks that measure collateral damage. A case counts as compromised if a canary string reaches anything the model can see - tool output, tool arguments, or the final answer - or if a forbidden command actually ran. Counting only one of those two failure modes flatters a defence, so both are counted."},
+    {"type": "paragraph", "text": "Three metrics are reported together: attack success rate, utility (benign tasks that still complete), and approval burden (how often a human is asked). The last one matters because every prompt is a chance for a tired operator to click yes, which is why the default approver in an unattended run denies everything rather than allowing it."},
+    {"type": "paragraph", "text": "The policy was written against the <i>dev</i> half of the set only; the <i>test</i> half is held out, and no rule references a case identifier. Two baselines are run: a scripted client that replays exactly what a fully hijacked model would do, and a real local model (qwen2.5, temperature 0). The scripted run removes the model from the loop so that a failure is always a failure of the guard; the model run keeps the guard honest about what actually occurs."},
+    {"type": "table", "header": true, "widths": [1.75, 1.0, 1.25, 2.0], "rows": [
+      ["run", "baseline", "with AgentGuard", "utility (baseline -> guard)"],
+      ["scripted (perfect attacker)", "16/16", "0/16", "4/4 -> 4/4"],
+      ["qwen2.5:7b, temperature 0", "5/16", "0/16", "3/4 -> 3/4"],
+      ["qwen2.5:3b, temperature 0", "6/16", "0/16", "4/4 -> 3/4"]
+    ]},
+    {"type": "paragraph", "text": "The model column deserves an honest reading. The 7B model <i>refused</i> the file-borne attacks on its own: it summarised the README and ignored the hidden maintainer note, which is why the exfiltration family scores 0 of 4 against the unprotected baseline. It complied the moment the request was operational - open a file outside the project because the user says it is theirs, run <i>env</i> and report the API keys, run <i>chmod -R 777 .</i> because a README says to. Every one of those fired without the layer and none fired with it. The guard's number does not depend on the model's mood, which is the point of measuring both."},
+
+    {"type": "heading", "level": 2, "text": "5. What the evaluation found in the guard itself"},
+    {"type": "paragraph", "text": "Running the suite against a real model found more defects in the layer than in the model. Each row below has a regression test or an explicit entry in the limitations section."},
+    {"type": "table", "header": true, "widths": [0.95, 3.3, 2.6], "rows": [
+      ["kind", "finding", "outcome"],
+      ["bypass", "path hidden behind @ in curl -d @file", "fixed: value prefixes unwrapped"],
+      ["bypass", "cat .env skipped the fs.read protected globs", "fixed: one global protected set"],
+      ["bypass", "env printed the agent's own API key", "fixed: sanitized child environment"],
+      ["bypass", "./ls and payload/ls matched the allowlist by name", "fixed: binaries must resolve in a trusted root"],
+      ["bypass", "ls.exe never matched the allowlist (everything blocked)", "fixed: executable suffix normalised"],
+      ["false positive", "find -exec grep TODO {} + refused as shell syntax", "fixed: narrowed the control set"],
+      ["false positive", "grep -oP '/src/.*?TODO' read as an absolute path", "fixed: classification requires existence"],
+      ["policy bug", "a typo in a rule matcher silently disabled the rule", "fixed: policy loading is strict"],
+      ["documented", "symlink swapped between check and open (TOCTOU)", "narrowed, not closed"],
+      ["documented", "child process writes outside the workspace", "container territory"]
+    ]},
+
+    {"type": "heading", "level": 2, "text": "6. Limitations"},
+    {"type": "paragraph", "text": "<b>Same process, same privileges.</b> A native-code escape defeats the layer, which is why interpreters are denied and a container profile exists. <b>TOCTOU.</b> Paths are resolved twice - at decision time and immediately before use - which narrows but does not close the window against a concurrent attacker who can create symlinks inside the workspace. <b>Network egress is not enforced.</b> A network client is an ask, and arguments carrying URLs are an ask, but the process still has a socket; only --network=none enforces this. <b>Approvals are a user-interface affordance, not a security boundary.</b> <b>POSIX-first.</b> Windows is handled (junctions, short names, device names) but the evaluation assumes POSIX tools."},
+    {"type": "paragraph", "text": "<b>Evidence limits.</b> One run per case at temperature 0, so per-family cells (n at most 4) are observations, not rates. One model family at two sizes, both local. Sixteen hand-written attacks on a 10/10 split: the held-out half is a signal, not a confidence interval. The container profile in <i>docker/</i> is written but was never run, because the development host had no Docker daemon; the slide deck was geometry-audited rather than rendered."},
+
+    {"type": "heading", "level": 2, "text": "7. Reproducing"},
+    {"type": "paragraph", "text": "<font face='Courier' size=9>python benchmarks/run_evals.py --scripted<br/>python benchmarks/run_evals.py --model qwen2.5:7b --runs 1<br/>python -m agentguard.cli --workspace ./demo/workspace demo<br/>python -m pytest -q</font>"},
+    {"type": "paragraph", "text": "The scripted run needs no model and completes in under a minute; it is the deterministic claim. The model run needs a local Ollama with the model pulled and produces the numbers in Table 1."},
+
+    {"type": "heading", "level": 2, "text": "References and related work"},
+    {"type": "paragraph", "text": "The suite here is deliberately small. Public corpora of agent-oriented prompt injection - AgentDojo, InjecAgent and BIPIA among them - are the obvious way to extend the attack side; the defence is agnostic to how the injection arrives. The capability model follows operating-system mechanisms (seccomp filters, Landlock path restrictions, container profiles) rather than the shape of content moderation, which is the distinction this brief argues for."}
+  ]
+}
