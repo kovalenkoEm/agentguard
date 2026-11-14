@@ -9,8 +9,10 @@ from agentguard.commands import (
     ShellSyntaxError,
     binary_name,
     classify_arguments,
+    is_explicit,
     parse_argv,
     resolve_binary,
+    trust_target,
 )
 
 
@@ -126,3 +128,29 @@ def test_classify_does_not_treat_regex_as_path(ws):
     """A regex that starts with '/' is not an absolute path (found by the eval)."""
     analyses = classify_arguments(ws, ("grep", "-oP", "/src/.*?TODO", "**/*.py"))
     assert analyses == [], f"patterns must not be classified as paths: {analyses}"
+
+
+def test_trust_target_for_bare_name_uses_the_path_lookup():
+    """A distro may link /usr/bin/ls into /usr/lib/...; that is not an attack."""
+    from pathlib import Path
+
+    located = Path("/usr/bin/ls")
+    resolved = Path("/usr/lib/cargo/bin/coreutils/ls")
+    assert trust_target("ls", located, resolved) == located
+
+
+def test_trust_target_for_explicit_path_uses_the_real_target():
+    """`./ls` and `/tmp/payload/ls` get no benefit of the doubt."""
+    from pathlib import Path
+
+    located = Path("/tmp/payload/ls")
+    resolved = Path("/tmp/payload/ls")
+    assert trust_target("./ls", located, resolved) == resolved
+    assert trust_target("/tmp/payload/ls", located, resolved) == resolved
+    assert trust_target("payload/ls", located, resolved) == resolved
+
+
+def test_is_explicit():
+    assert not is_explicit("ls")
+    assert is_explicit("./ls")
+    assert is_explicit("/usr/bin/ls")

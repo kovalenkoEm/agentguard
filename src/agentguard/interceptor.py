@@ -23,8 +23,10 @@ from .commands import (
     binary_name,
     binary_trusted,
     classify_arguments,
+    locate_binary,
     parse_argv,
     resolve_binary,
+    trust_target,
 )
 from .paths import PathAnalysis, analyse, canonical_root, rel_posix
 from .policy import ALLOW, ASK, DENY, Decision, Policy, Request
@@ -281,6 +283,8 @@ class GuardedRuntime:
         if binary_path is None:
             self.guard.record("not-found", tool="run_bash", request=command, program=argv[0])
             return f"ERROR: command not found: {argv[0]}"
+        located = locate_binary(argv[0], self.guard.path)
+        trusted_at = trust_target(argv[0], located, binary_path)
 
         args = classify_arguments(self.root, argv)
         req = Request(
@@ -296,7 +300,7 @@ class GuardedRuntime:
             # resolved basename silently disables every allowlist entry.
             binary=binary_name(Path(argv[0])),
             binary_path=str(binary_path),
-            untrusted_binary=not binary_trusted(binary_path, self.guard.binary_roots),
+            untrusted_binary=not binary_trusted(trusted_at or binary_path, self.guard.binary_roots),
             paths=tuple(str(a.real) for a in args if a.real is not None and a.in_workspace),
             outside_paths=tuple(a.display for a in args if not a.ok),
             note=next((a.reason for a in args if not a.ok and a.reason), ""),

@@ -32,6 +32,10 @@ __all__ = [
     "ShellSyntaxError",
     "parse_argv",
     "resolve_binary",
+    "locate_binary",
+    "is_explicit",
+    "trust_target",
+    "binary_name",
     "binary_trusted",
     "looks_like_path",
     "classify_arguments",
@@ -84,23 +88,48 @@ def parse_argv(command: str) -> tuple[str, ...]:
 
 def resolve_binary(name: str, search_path: str | None = None) -> Path | None:
     """Resolve a program name to its real location, or None if it is missing."""
+    located = locate_binary(name, search_path)
+    if located is None:
+        return None
+    try:
+        return Path(os.path.realpath(located))
+    except OSError:  # pragma: no cover
+        return located
+
+
+def locate_binary(name: str, search_path: str | None = None) -> Path | None:
+    """Where the name is *found* (before following links), or None."""
     if not name or name.startswith("-"):
         return None
     if os.sep in name or "/" in name or (WINDOWS and _DRIVE.match(name)):
         candidate = Path(name)
         try:
-            if not candidate.exists():
-                return None
-            return Path(os.path.realpath(os.fspath(candidate)))
+            return candidate if candidate.exists() else None
         except OSError:  # pragma: no cover - platform dependent
             return None
     found = shutil.which(name, path=search_path)
-    if not found:
-        return None
-    try:
-        return Path(os.path.realpath(found))
-    except OSError:  # pragma: no cover
-        return Path(found)
+    return Path(found) if found else None
+
+
+def is_explicit(name: str) -> bool:
+    """True when the caller named a location, not just a program."""
+    return bool(name) and (os.sep in name or "/" in name or (WINDOWS and bool(_DRIVE.match(name))))
+
+
+def trust_target(invoked: str, located: Path | None, resolved: Path | None) -> Path | None:
+    """Which path the trust check should look at.
+
+    A bare name (``ls``) is resolved by PATH, so the directory PATH chose is what
+    gets trusted: a distro that ships ``/usr/bin/ls`` as a link into
+    ``/usr/lib/cargo/bin/coreutils`` is not an attack, and refusing it makes the
+    guard look broken on stock CI runners. A name with a location in it
+    (``./ls``, ``/tmp/payload/ls``) gets no such benefit — its *real* target must
+    sit in a trusted root, which is what stops the shadow-binary trick.
+    """
+    if is_explicit(invoked):
+        return resolved
+    return located or resolved
+
 
 
 def binary_trusted(path: Path, roots: Sequence[str]) -> bool:
