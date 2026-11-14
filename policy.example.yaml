@@ -1,0 +1,194 @@
+# AgentGuard policy -- the single source of truth for what an agent may do.
+#
+# Model
+# -----
+# A tool call is compiled into a *capability request* (fs.read / fs.write /
+# proc.spawn) and evaluated top-down:
+#
+#   1. explicit rules          -- first match wins
+#   2. capability block        -- scope, protected globs, binary allow/ask/deny
+#   3. `default`               -- fail closed
+#
+# There is no way to widen permissions from the model side: paths are resolved
+# to their real location before they are classified, and binaries are checked
+# against their resolved path, not against the name the model typed.
+
+version: 1
+
+# Informational only -- the real root is the process cwd (or --workspace).
+workspace: ./workspace
+
+# Verdict when nothing matches anything. `deny` is the only sane value.
+default: deny
+
+# A binary is trusted only if it resolves inside one of these roots. Asking for
+# "./ls", "payload/ls" or "/tmp/x/ls" is denied even though the basename is on
+# the allow list.
+trusted_binary_roots:
+  - /usr/bin
+  - /bin
+  - /usr/local/bin
+  - /opt/homebrew/bin
+  - C:\Program Files\Git\usr\bin
+  - C:\Program Files\Git\cmd
+  - C:\Program Files\Git\bin
+  - C:\Windows\System32
+
+# Files matching these patterns are never touched -- by any capability. One list,
+# because `cat .env`, `read_file(".env")` and `tar .env` are the same request in
+# different clothes.
+protected:
+  - "**/.env"
+  - "**/.env.*"
+  - "**/*.pem"
+  - "**/*.key"
+  - "**/id_rsa*"
+  - "**/id_ed25519*"
+  - "**/.ssh/**"
+  - "**/.aws/**"
+  - "**/.gnupg/**"
+  - "**/.git/config"
+  - "**/secrets/**"
+  - "**/credentials*"
+
+capabilities:
+
+  # ---------------------------------------------------------------- fs.read
+  fs.read:
+    scope: workspace            # workspace | any | none
+
+  # --------------------------------------------------------------- fs.write
+  fs.write:
+    scope: workspace
+    protected:                  # in addition to the global list
+      - "**/.git/**"
+      - "**/.github/workflows/**"
+
+  # ------------------------------------------------------------- proc.spawn
+  proc.spawn:
+    # Hard block. These are not "commands", they are an unbounded capability.
+    deny:
+      - sudo
+      - su
+      - doas
+      - chmod
+      - chown
+      - chattr
+      - dd
+      - kill
+      - pkill
+      - systemctl
+      - service
+      - mount
+      - umount
+      - nc
+      - ncat
+      - netcat
+      - telnet
+      - ssh
+      - scp
+      - sftp
+      - rsync
+      - docker
+      - kubectl
+      - crontab
+      - at
+      # interpreters == arbitrary code execution, not a "command"
+      - sh
+      - bash
+      - zsh
+      - dash
+      - ksh
+      - python
+      - python2
+      - python3
+      - perl
+      - ruby
+      - node
+      - php
+      - lua
+      - awk
+      - sed
+      - xargs
+      - env
+      - eval
+      - exec
+      - busybox
+
+    # Needs a human in the loop.
+    ask:
+      - rm
+      - rmdir
+      - mv
+      - cp
+      - curl
+      - wget
+      - pip
+      - pip3
+      - uv
+      - npm
+      - make
+      - pytest          # test runners execute repository code (conftest.py)
+      - tar
+      - unzip
+      - gzip
+      - git
+
+    # Executes unattended. Note that every argument that looks like a path is
+    # still resolved and must stay inside the workspace.
+    allow:
+      - ls
+      - cat
+      - head
+      - tail
+      - wc
+      - grep
+      - find
+      - stat
+      - file
+      - diff
+      - sort
+      - uniq
+      - cut
+      - pwd
+      - echo
+      - date
+
+    # Per-binary subcommand policy, matched against argv[1:].
+    subcommands:
+      git:
+        deny:
+          - ["push"]
+          - ["reset", "--hard"]
+          - ["clean", "-fd"]
+          - ["config", "--global"]
+          - ["remote", "add"]
+        ask:
+          - ["commit"]
+          - ["checkout"]
+          - ["merge"]
+          - ["pull"]
+
+# --------------------------------------------------------------------- rules
+# Cross-cutting rules, evaluated before the capability block.
+rules:
+
+  - id: network-egress
+    when: {args_any: ["http://", "https://", "ftp://", "smtp://"]}
+    action: ask
+    reason: "argument contains a network URL"
+
+  - id: no-recursive-force-delete
+    when: {binary: rm, args_any: ["-rf", "-fr", "-r -f", "-f -r", "-Rf"]}
+    action: deny
+    reason: "recursive force delete is never part of a legitimate agent task"
+
+  - id: no-wildcard-rm
+    when: {binary: rm, args_any: [" *", "./*", "/*"]}
+    action: deny
+    reason: "wildcard delete"
+
+  - id: protected-material
+    when: {args_any: ["id_rsa", ".aws/credentials", ".ssh/id_", "BEGIN RSA PRIVATE KEY", "BEGIN OPENSSH PRIVATE KEY"]}
+    action: deny
+    reason: "argument references private key material"

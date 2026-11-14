@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.egg-info/
+benchmarks/results/*
+!benchmarks/results/*.json
+.audit/
+workspace/
+demo/
+.demo/
+*.cast
