@@ -25,7 +25,7 @@ jobs:
         run: python -m pytest -q
 
       - name: red-team suite (scripted, no model needed)
-        run: python benchmarks/run_evals.py --scripted --out /tmp/scripted.json
+        run: python benchmarks/run_evals.py --scripted --verbose --out /tmp/scripted.json
 
       - name: the guard must stop every scripted attack
         run: |
