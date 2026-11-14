@@ -24,6 +24,21 @@ def _policy() -> Policy:
     )
 
 
+def _trusted_roots(*names: str) -> list[str]:
+    """Installation roots of the binaries this test actually runs.
+
+    Deriving the trusted roots from the binary under test (rather than from a
+    random other one) keeps the test honest on hosts where `realpath` lands in a
+    different directory — some images ship `/usr/bin/rm` as a link elsewhere.
+    """
+    roots = set()
+    for name in names:
+        found = shutil.which(name)
+        if found:
+            roots.add(str(Path(os.path.realpath(found)).parent))
+    return sorted(roots)
+
+
 @pytest.fixture()
 def env(tmp_path):
     ws = tmp_path / "workspace"
@@ -34,9 +49,15 @@ def env(tmp_path):
     private.mkdir()
     (private / ".env").write_text("SECRET=AGENTGUARD_TEST\n", encoding="utf-8")
 
-    ls = shutil.which("ls")
-    roots = [str(os.path.dirname(os.path.realpath(ls)))] if ls else []
-    guard = Guard(_policy(), ws, audit=AuditLog(tmp_path / "audit.jsonl"), binary_roots=roots)
+    roots = _trusted_roots("ls", "cat", "rm")
+    if not roots:
+        pytest.skip("no POSIX tools on PATH")
+    guard = Guard(
+        _policy(),
+        ws,
+        audit=AuditLog(tmp_path / "audit.jsonl"),
+        binary_roots=roots,
+    )
     return ws, private, guard, GuardedRuntime(guard)
 
 
