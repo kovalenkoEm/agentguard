@@ -1,5 +1,8 @@
 # AgentGuard
 
+[![ci](https://github.com/kovalenkoEm/agentguard/actions/workflows/ci.yml/badge.svg)](https://github.com/kovalenkoEm/agentguard/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **A capability layer between an LLM agent and your machine.** Every tool call is
 resolved, classified into a capability request, and answered `ALLOW` / `ASK` /
 `DENY` before it touches a file or a process. What comes back is a red
@@ -300,4 +303,4 @@ docker/            network-less profile for the "hard isolation" demo
 
 ## License
 
-MIT.
+[MIT](LICENSE) — do what you want with it, no warranty.
