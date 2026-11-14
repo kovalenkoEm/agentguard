@@ -123,10 +123,12 @@ _EXE_SUFFIXES = (".exe", ".cmd", ".bat", ".com")
 
 
 def binary_name(path: Path) -> str:
-    """Policy-facing binary name: ``ls.exe`` and ``C:\\...\\ls`` are both ``ls``.
+    """The name a user typed: ``ls.exe`` and ``./bin/ls`` are both ``ls``.
 
-    Without this, a Windows host silently fails every allowlist entry, which
-    looks like "everything is blocked" and hides the real behaviour.
+    This is the *policy key*, not the trust decision. Trust uses the resolved
+    path (see :func:`binary_trusted`); keying the policy on the resolved
+    basename breaks on any host that ships ``rm`` as a link to a differently
+    named file, which silently disables the whole allowlist.
     """
     name = path.name
     if WINDOWS:

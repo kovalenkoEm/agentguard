@@ -289,7 +289,12 @@ class GuardedRuntime:
             root=str(self.root),
             display=command,
             argv=argv,
-            binary=binary_name(binary_path),
+            # The policy is written in terms of the command the model asked for
+            # ("rm", "git"), so that is the key. The resolved file is a separate
+            # fact, used only for the trust check: on some images /usr/bin/rm is
+            # a link to a differently named binary, and keying the policy on the
+            # resolved basename silently disables every allowlist entry.
+            binary=binary_name(Path(argv[0])),
             binary_path=str(binary_path),
             untrusted_binary=not binary_trusted(binary_path, self.guard.binary_roots),
             paths=tuple(str(a.real) for a in args if a.real is not None and a.in_workspace),

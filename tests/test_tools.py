@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 from pathlib import Path
@@ -7,7 +8,7 @@ from pathlib import Path
 import pytest
 
 from agentguard.audit import AuditLog
-from agentguard.interceptor import Blocked, Guard, GuardedRuntime, UserDenied
+from agentguard.interceptor import Blocked, Guard, GuardedRuntime, ToolError, UserDenied
 from agentguard.policy import DENY, Policy
 
 
@@ -177,3 +178,31 @@ def test_unknown_tool(env):
     _, _, _, runtime = env
     with pytest.raises(Exception):
         runtime.call("rm_rf", {"path": "/"})
+
+
+def test_policy_key_is_the_invoked_name(env, monkeypatch):
+    """`rm` must stay `rm` in the policy even when it resolves to another file.
+
+    Some images ship /usr/bin/rm as a link to a differently named binary. Keying
+    the policy on the resolved basename made every allowlist entry miss and the
+    guard blocked everything -- found by CI on a fresh runner, not locally.
+    """
+    ws, _, guard, runtime = env
+    real = shutil.which("cat")
+    if not real:
+        pytest.skip("no cat on this host")
+    shadow = Path(real).with_name("gnu-cat")
+    monkeypatch.setattr("agentguard.interceptor.resolve_binary", lambda name, path=None: shadow)
+
+    output = runtime.run_bash("cat README.md")
+    assert "hi" in output
+
+    events = [
+        json.loads(line)
+        for line in Path(guard.audit.path).read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    decision = [event for event in events if event.get("event") == "decision"][-1]
+    assert decision["binary"] == "cat", "policy key must be the invoked name, not the resolved file"
+    assert decision["verdict"] == "ALLOW"
+
